@@ -1,0 +1,21 @@
+{
+  "name": "to-md",
+  "interface": {
+    "displayName": "to-md"
+  },
+  "plugins": [
+    {
+      "name": "to-md",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/Inhibit0r/to-md.git",
+        "ref": "main"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

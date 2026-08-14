@@ -1,0 +1,13 @@
+{
+  "name": "to-md",
+  "version": "1.0.0",
+  "description": "Медиа, документы и фотографии в markdown: whisper локально, anydoc для документов, зрение модели для снимков.",
+  "author": {
+    "name": "Inhibit0r",
+    "url": "https://github.com/Inhibit0r"
+  },
+  "homepage": "https://github.com/Inhibit0r/to-md",
+  "repository": "https://github.com/Inhibit0r/to-md",
+  "license": "MIT",
+  "keywords": ["markdown", "transcription", "whisper", "ocr", "documents"]
+}

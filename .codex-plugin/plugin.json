@@ -1,0 +1,28 @@
+{
+  "name": "to-md",
+  "version": "1.0.0",
+  "description": "Медиа, документы и фотографии в markdown: whisper локально, anydoc для документов, зрение модели для снимков.",
+  "author": {
+    "name": "Inhibit0r",
+    "url": "https://github.com/Inhibit0r"
+  },
+  "homepage": "https://github.com/Inhibit0r/to-md",
+  "repository": "https://github.com/Inhibit0r/to-md",
+  "license": "MIT",
+  "keywords": ["markdown", "transcription", "whisper", "ocr", "documents"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "to-md",
+    "shortDescription": "Любой файл в markdown",
+    "longDescription": "Расшифровывает медиа локальным whisper, конвертирует документы через anydoc, распознаёт фотографии зрением модели. Содержание берётся только из источника, выброшенное перечислено.",
+    "developerName": "Inhibit0r",
+    "category": "Productivity",
+    "capabilities": ["Instructions"],
+    "websiteURL": "https://github.com/Inhibit0r/to-md",
+    "defaultPrompt": [
+      "Переведи файлы из in/ в markdown.",
+      "Распознай снимки задач с лекции.",
+      "Забери последнюю запись с Plaud и сделай summary."
+    ]
+  }
+}

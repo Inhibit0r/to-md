@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "to-md",
+  "description": "Один вход для превращения любого материала в markdown.",
+  "owner": {
+    "name": "Inhibit0r",
+    "url": "https://github.com/Inhibit0r"
+  },
+  "plugins": [
+    {
+      "name": "to-md",
+      "description": "Медиа, документы и фотографии в markdown. Whisper локально, anydoc для документов, зрение модели для снимков.",
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}

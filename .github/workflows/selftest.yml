@@ -1,0 +1,37 @@
+name: selftest
+
+on:
+  push:
+  pull_request:
+
+# Наименьшие права: воркфлоу только читает репозиторий.
+permissions: {}
+
+jobs:
+  selftest:
+    # Плагин обещает три платформы — проверяем на всех трёх, а не на удобной.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      # Экшены прибиты к коммитам: тег можно переставить, коммит нельзя.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          # Нижняя граница из README: её и проверяем, а не то, что новее.
+          python-version: "3.10"
+
+      # Единственная зависимость самопроверки: ветку документов она гоняет живьём.
+      - run: pip install firecrawl-anydoc
+
+      - run: python -X utf8 scripts/to_md.py --selftest
+
+      - run: python -X utf8 scripts/fetch_plaud.py --selftest
+
+      - run: python -X utf8 -m py_compile scripts/to_md.py scripts/fetch_plaud.py
