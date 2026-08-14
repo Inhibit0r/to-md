@@ -26,6 +26,7 @@ python "${CLAUDE_PLUGIN_ROOT}/scripts/to_md.py" --doctor --data "${CLAUDE_PLUGIN
 |---|---|
 | `whisper` пуст | `whisper-ctranslate2` |
 | `anydoc: false` | `firecrawl-anydoc` |
+| `plaud: false` | `requests` — только если пользователю нужен загрузчик с диктофона Plaud. Транзитивно он не приезжает ни с чем |
 | `nvidia: true` и `cuda_pkgs: false` | `nvidia-cublas-cu12`, `nvidia-cudnn-cu12` |
 | `os: Darwin` | пакеты `nvidia-*` не ставятся: Metal у CTranslate2 нет, на Маке считается процессор |
 | `weights: false` | веса `large-v3-turbo`, ≈1,5 ГБ — **отдельным вопросом** |
@@ -38,7 +39,7 @@ python "${CLAUDE_PLUGIN_ROOT}/scripts/to_md.py" --doctor --data "${CLAUDE_PLUGIN
 pip install <согласованный список>
 ```
 
-Ставятся только имена из таблицы выше — `whisper-ctranslate2`, `firecrawl-anydoc`, `nvidia-cublas-cu12`, `nvidia-cudnn-cu12`. Понадобилось что-то ещё → это разговор с пользователем, а не строка в этой команде.
+Ставятся только имена из таблицы выше — `whisper-ctranslate2`, `firecrawl-anydoc`, `requests`, `nvidia-cublas-cu12`, `nvidia-cudnn-cu12`. Понадобилось что-то ещё → это разговор с пользователем, а не строка в этой команде.
 
 Установка не пошла из-за прокси → на этой машине помогает `NO_PROXY=*` перед командой.
 

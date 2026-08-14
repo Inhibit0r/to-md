@@ -30,8 +30,9 @@ jobs:
           # Нижняя граница из README: её и проверяем, а не то, что новее.
           python-version: "3.10"
 
-      # Единственная зависимость самопроверки: ветку документов она гоняет живьём.
-      - run: pip install firecrawl-anydoc
+      # anydoc — ветка документов гоняется живьём; requests — прямой импорт
+      # загрузчика Plaud, транзитивно он не приезжает.
+      - run: pip install firecrawl-anydoc requests
 
       - run: python -X utf8 scripts/to_md.py --selftest
 

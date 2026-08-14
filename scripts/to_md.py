@@ -253,6 +253,9 @@ def doctor(data):
         "whisper": whisper,
         "anydoc": anydoc_ok,
         "cuda_pkgs": have("nvidia.cublas") and have("nvidia.cudnn"),
+        # requests нужен только загрузчику Plaud, поэтому в ready не входит.
+        # Транзитивно он не приезжает: huggingface-hub требует его лишь под extra gradio.
+        "plaud": have("requests"),
         "nvidia": bool(shutil.which("nvidia-smi")),
         "data": str(data),
         "weights": (data / "models" / "large-v3-turbo" / "model.bin").exists(),
@@ -608,6 +611,7 @@ def selftest():
         "whisper",
         "anydoc",
         "cuda_pkgs",
+        "plaud",
         "nvidia",
         "data",
         "weights",
