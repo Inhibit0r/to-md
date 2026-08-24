@@ -6,7 +6,7 @@
   to_md.py --collect <out> [--in <dir>]  пересборка сводного файла и реестра
   to_md.py --selftest                    самопроверка
 
-Ручки основного прогона: --data, --lang, --hotwords, --device, --gap.
+Ручки основного прогона: --data, --lang, --hotwords, --device, --gap, --vad.
 """
 
 import collections
@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 # ponytail: жёсткий потолок абзаца, чтобы монолог без пауз не стал простынёй
 MAX_CHARS = 600
@@ -32,6 +33,21 @@ WAVE = 6  # батчей в одной волне
 WAVE_FROM = 31  # с этого числа снимков идём волнами
 ESCALATE_MARKS = 2  # столько меток отправляют файл на второй проход
 MARK = "[неразборчиво]"
+
+# Детектор порчи расшифровки. Пороги откалиброваны на реальных записях
+# 07-30..08-24: петли «Угу.»×14 и «Корректор А.Кулакова»×19, титры из
+# обучающих данных whisper, хвост, схлопнутый VAD в сегмент 60 с.
+LOOP_RUN = 6  # столько подряд одинаковых сегментов — петля, а не диалог
+STALL_SEC, STALL_CHARS = 30, 50  # сегмент длиннее и при этом почти пустой — провал
+GAP_SEC = 60  # дыра между соседними сегментами
+TITLE_ARTIFACTS = (  # титры, вшитые в обучающие данные whisper; список конечный
+    "субтитр",
+    "dimatorzok",
+    "продолжение следует",
+    "спасибо за просмотр",
+    " корректор а ",
+    " редактор а ",
+)
 
 MEDIA_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mp3", ".wav", ".m4a"}
 DOC_EXT = {
@@ -85,6 +101,78 @@ def mmss(seconds):
     m, s = divmod(int(round(seconds)), 60)
     h, m = divmod(m, 60)
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
+
+def norm_text(text):
+    return re.sub(r"[^\w]+", " ", (text or "").lower()).strip()
+
+
+def suspect(segments, hotwords=""):
+    """Признаки испорченной расшифровки — список причин с якорями [MM:SS]."""
+    segs = [s for s in segments if (s.get("text") or "").strip()]
+    reasons, seen_art, seen_echo = [], set(), False
+    hw = norm_text(hotwords)
+    run_text, run_len, run_start = None, 0, 0.0
+    prev_end = None
+
+    def flush_run():
+        if run_len >= LOOP_RUN:
+            reasons.append(f"петля «{run_text}» ×{run_len} с [{mmss(run_start)}]")
+
+    for s in segs:
+        t = norm_text(s["text"])
+        padded = f" {t} "
+        for a in TITLE_ARTIFACTS:
+            if a in padded and a not in seen_art:
+                seen_art.add(a)
+                reasons.append(
+                    f"титры-артефакт «{s['text'].strip()}» на [{mmss(s['start'])}]"
+                )
+                break
+        if hw and hw in t and not seen_echo:
+            seen_echo = True
+            reasons.append(f"эхо hotwords на [{mmss(s['start'])}]")
+        if t == run_text:
+            run_len += 1
+        else:
+            flush_run()
+            run_text, run_len, run_start = t, 1, s["start"]
+        if s["end"] - s["start"] > STALL_SEC and len(t) < STALL_CHARS:
+            reasons.append(
+                f"провал: {int(s['end'] - s['start'])} с почти без текста на [{mmss(s['start'])}]"
+            )
+        if prev_end is not None and s["start"] - prev_end > GAP_SEC:
+            reasons.append(
+                f"дыра {int(s['start'] - prev_end)} с после [{mmss(prev_end)}]"
+            )
+        prev_end = s["end"]
+    flush_run()
+    return reasons[:8]  # ponytail: хвост причин решению уже ничего не добавляет
+
+
+def add_banner(md_path, reasons, alt_name):
+    """Пометка о подозрении — в тело md: фронтматтер остаётся плоским."""
+    text = md_path.read_text(encoding="utf-8")
+    tail = (
+        f" Рядом альтернативный прогон {alt_name} — сведи и удали его."
+        if alt_name
+        else ""
+    )
+    banner = "> Подозрение на потери: " + "; ".join(reasons) + "." + tail + "\n\n"
+    i = text.index("\n---\n\n") + len("\n---\n\n")
+    md_path.write_text(text[:i] + banner + text[i:], encoding="utf-8")
+
+
+PLAUD_TOKENS = pathlib.Path.home() / ".plaud" / "tokens.json"
+
+
+def plaud_token_fresh(path=PLAUD_TOKENS):
+    """None — логина не было или файл неожиданной формы; False — протух; True — живой."""
+    try:
+        tokens = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+        return int(tokens.get("expires_at") or 0) - 300_000 > time.time() * 1000
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
 
 
 EXT_KIND = {
@@ -256,6 +344,7 @@ def doctor(data):
         # requests нужен только загрузчику Plaud, поэтому в ready не входит.
         # Транзитивно он не приезжает: huggingface-hub требует его лишь под extra gradio.
         "plaud": have("requests"),
+        "plaud_token": plaud_token_fresh(),
         "nvidia": bool(shutil.which("nvidia-smi")),
         "data": str(data),
         "weights": (data / "models" / "large-v3-turbo" / "model.bin").exists(),
@@ -333,7 +422,9 @@ def build_doc(source_path, text):
     return head(source_path, chars=len(text)) + text + "\n"
 
 
-def run_whisper(files, names, rawdir, data, lang, hotwords, device, gap):
+def run_whisper(
+    files, names, rawdir, data, lang, hotwords, device, gap, vad=True, no_speech=None
+):
     """Партия уходит одной командой; md собирается здесь же из json, json удаляется."""
     model_dir = pathlib.Path(data) / "models" / "large-v3-turbo"
     if (model_dir / "model.bin").exists():
@@ -352,10 +443,15 @@ def run_whisper(files, names, rawdir, data, lang, hotwords, device, gap):
         "whisper-ctranslate2",
         *model_args,
         *(["--hotwords", hotwords] if hotwords else []),
+        # Перенос контекста между окнами каскадит повторы («Угу.»×20,
+        # «Корректор А.Кулакова»×19): с выключенным не было петель ни в одном прогоне.
+        "--condition_on_previous_text",
+        "False",
         "--language",
         lang,
         "--vad_filter",
-        "True",
+        str(bool(vad)),
+        *(["--no_speech_threshold", str(no_speech)] if no_speech is not None else []),
         "--output_format",
         "json",
         "--output_dir",
@@ -364,11 +460,14 @@ def run_whisper(files, names, rawdir, data, lang, hotwords, device, gap):
         device,
         *[str(f) for f in files],
     ]
-    code = subprocess.call(cmd)
+    # Прогресс whisper — в stderr: --json оставляет stdout машинно-читаемым.
+    # utf-8 в окружении — иначе Windows-консоль отдаёт кракозябры.
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+    code = subprocess.call(cmd, env=env, stdout=sys.stderr)
     if code and device == "cuda":
-        print("CUDA не поднялась, повтор на процессоре")
+        print("CUDA не поднялась, повтор на процессоре", file=sys.stderr)
         cmd[cmd.index("--device") + 1] = "cpu"
-        code = subprocess.call(cmd)
+        code = subprocess.call(cmd, env=env, stdout=sys.stderr)
     if code:
         return []
 
@@ -376,17 +475,19 @@ def run_whisper(files, names, rawdir, data, lang, hotwords, device, gap):
     for f in files:
         js = pathlib.Path(rawdir) / (f.stem + ".json")
         if not js.exists():
-            print(f"! {f.name}: whisper не отдал json")
+            print(f"! {f.name}: whisper не отдал json", file=sys.stderr)
             continue
         result = json.loads(js.read_text(encoding="utf-8"))
         md = pathlib.Path(rawdir) / names[f]
         md.write_text(build(result, f, gap), encoding="utf-8")
         js.unlink()
-        written.append((f, md))
+        written.append((f, md, suspect(result.get("segments", []), hotwords)))
     return written
 
 
-def dispatch(indir, out, data, lang="ru", hotwords="", device="auto", gap=0.7):
+def dispatch(
+    indir, out, data, lang="ru", hotwords="", device="auto", gap=0.7, vad=True
+):
     indir, out = pathlib.Path(indir), pathlib.Path(out)
     raw = out / "raw"
     raw.mkdir(parents=True, exist_ok=True)
@@ -437,7 +538,7 @@ def dispatch(indir, out, data, lang="ru", hotwords="", device="auto", gap=0.7):
 
     if todo["media"]:
         keys = {f: k for f, k in todo["media"]}
-        for f, md in run_whisper(
+        results = run_whisper(
             [f for f, _ in todo["media"]],
             names,
             raw,
@@ -446,15 +547,45 @@ def dispatch(indir, out, data, lang="ru", hotwords="", device="auto", gap=0.7):
             hotwords,
             pick_device(device),
             gap,
-        ):
+            vad=vad,
+        )
+        # Подозрение на потери → один alt-прогон другим профилем (без VAD и
+        # hotwords): профили теряют разное, сведение остаётся за оператором.
+        suspects = [f for f, _, why in results if why]
+        alt_names = {f: f"{pathlib.Path(names[f]).stem}-alt.md" for f in suspects}
+        alts = (
+            {
+                f: md
+                for f, md, _ in run_whisper(
+                    suspects,
+                    alt_names,
+                    raw,
+                    data,
+                    lang,
+                    "",
+                    pick_device(device),
+                    gap,
+                    vad=False,
+                    no_speech=0.3,
+                )
+            }
+            if suspects
+            else {}
+        )
+        for f, md, why in results:
             reg[keys[f]] = {
                 "src": f.name,
                 "md": f"raw/{md.name}",
                 "at": datetime.date.today().isoformat(),
             }
-            report["converted"].append(
-                {"src": f.name, "md": f"raw/{md.name}", "kind": "media"}
-            )
+            item = {"src": f.name, "md": f"raw/{md.name}", "kind": "media"}
+            if why:
+                item["suspect"] = why
+                alt = alts.get(f)
+                if alt is not None:
+                    item["alt"] = f"raw/{alt.name}"
+                add_banner(md, why, alt.name if alt is not None else None)
+            report["converted"].append(item)
 
     # По фото скрипт не считает ничего: отдаёт план, работу делают субагенты.
     report["photos"] = plan_photos([str(f) for f, _ in todo["photo"]])
@@ -612,6 +743,7 @@ def selftest():
         "anydoc",
         "cuda_pkgs",
         "plaud",
+        "plaud_token",
         "nvidia",
         "data",
         "weights",
@@ -620,6 +752,77 @@ def selftest():
     assert d["python_ok"] is (sys.version_info >= (3, 10))
     assert d["weights"] is False
     assert d["ready"] is (bool(d["whisper"]) and d["anydoc"] and d["python_ok"])
+
+    # Детектор порчи: чистый диалог молчит, каждая патология ловится с якорем.
+    ok_segs = [
+        {"start": i * 2.0, "end": i * 2.0 + 1.5, "text": f" фраза номер {i} про разное"}
+        for i in range(20)
+    ]
+    assert suspect(ok_segs) == [], suspect(ok_segs)
+    loop = [{"start": 41.0 + i, "end": 41.9 + i, "text": " Угу."} for i in range(6)]
+    got = suspect(ok_segs + loop)
+    assert any("петля" in r and "[00:41]" in r for r in got), got
+    assert suspect(ok_segs + loop[:5]) == [], "5 повторов — ещё диалог, не петля"
+    art = [{"start": 0.0, "end": 1.0, "text": " Субтитры делал DimaTorzok"}]
+    assert any("титры" in r for r in suspect(art)), suspect(art)
+    kor = [{"start": 0.0, "end": 1.0, "text": " Корректор А.Кулакова"}]
+    assert any("титры" in r for r in suspect(kor)), suspect(kor)
+    hw = "Ространснадзор, МТУ, ФГБУ."
+    echo = [{"start": 0.0, "end": 5.0, "text": " Ространснадзор, МТУ, ФГБУ."}]
+    assert any("hotwords" in r for r in suspect(echo, hw)), suspect(echo, hw)
+    assert suspect(echo) == [], "без hotwords та же фраза — обычная речь"
+    stall = [{"start": 0.0, "end": 40.0, "text": " я тебе не сомневался"}]
+    assert any("провал" in r for r in suspect(stall)), suspect(stall)
+    hole = [
+        {"start": 0.0, "end": 1.0, "text": " начало"},
+        {"start": 70.0, "end": 71.0, "text": " конец"},
+    ]
+    assert any("дыра" in r for r in suspect(hole)), suspect(hole)
+    # 12 провалов и 11 дыр между ними — 23 причины до среза, потолок обязан сработать.
+    flood = [
+        {"start": i * 200.0, "end": i * 200.0 + 40.0, "text": f" пауза {i}"}
+        for i in range(12)
+    ]
+    assert len(suspect(flood)) == 8, "причины не должны затапливать отчёт"
+
+    # Баннер подозрения: после фронтматтера, до тела, с именем alt-файла.
+    with tempfile.TemporaryDirectory() as tmp:
+        p = pathlib.Path(tmp) / "запись.md"
+        p.write_text(
+            head(__file__, duration=json.dumps("01:00")) + "[00:00] тело\n",
+            encoding="utf-8",
+        )
+        add_banner(p, ["петля «угу» ×7 с [01:00]"], "запись-alt.md")
+        text = p.read_text(encoding="utf-8")
+        assert text.index("Подозрение на потери") < text.index("[00:00] тело"), text
+        assert "запись-alt.md" in text, text
+        assert strip_head(text).startswith("> Подозрение"), strip_head(text)[:60]
+        p2 = pathlib.Path(tmp) / "без-альта.md"
+        p2.write_text(
+            head(__file__, duration=json.dumps("01:00")) + "[00:00] тело\n",
+            encoding="utf-8",
+        )
+        add_banner(p2, ["дыра 70 с после [00:01]"], None)
+        assert "-alt.md" not in p2.read_text(encoding="utf-8")
+
+    # Свежесть токена Plaud: None — логина не было, False — протух, True — живой.
+    with tempfile.TemporaryDirectory() as tmp:
+        tok = pathlib.Path(tmp) / "tokens.json"
+        assert plaud_token_fresh(tok) is None
+        tok.write_text('{"expires_at": 1}', encoding="utf-8")
+        assert plaud_token_fresh(tok) is False
+        tok.write_text(
+            json.dumps({"expires_at": int((time.time() + 3600) * 1000)}),
+            encoding="utf-8",
+        )
+        assert plaud_token_fresh(tok) is True
+        tok.write_text("[]", encoding="utf-8")
+        assert plaud_token_fresh(tok) is None
+        tok.write_text('{"expires_at": "2026-01-01T00:00:00Z"}', encoding="utf-8")
+        assert plaud_token_fresh(tok) is None
+
+    # Неизвестный флаг первым аргументом — usage и код 2, а не FileNotFoundError.
+    assert main(["--help"]) == 2
     print("ok")
 
 
@@ -654,6 +857,9 @@ def main(argv):
     if argv[0] == "--collect":
         print(collect(argv[1], arg_of(argv, "--in") or "in"))
         return 0
+    if argv[0].startswith("-"):
+        print(__doc__)
+        return 2
 
     report = dispatch(
         argv[0],
@@ -663,12 +869,16 @@ def main(argv):
         arg_of(argv, "--hotwords") or "",
         arg_of(argv, "--device") or "auto",
         float(arg_of(argv, "--gap") or 0.7),
+        arg_of(argv, "--vad").lower() != "false",
     )
     if "--json" in argv:
         print(json.dumps(report, ensure_ascii=False, indent=1))
     else:
         for c in report["converted"]:
             print(f"-> {c['md']}")
+            if c.get("suspect"):
+                extra = f" | alt: {c['alt']}" if c.get("alt") else ""
+                print(f"? {c['md']}: {'; '.join(c['suspect'])}{extra}")
         for s in report["skipped"]:
             print(f"! {s['src']}: {s['why']}")
         for t in report["text"]:

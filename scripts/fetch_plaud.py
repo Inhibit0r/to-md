@@ -46,21 +46,31 @@ TOKENS = Path.home() / ".plaud" / "tokens.json"
 DEFAULT_OUT = Path("in")
 
 
+def expired(tokens: dict[str, Any]) -> bool:
+    # expires_at в миллисекундах; 5 минут запаса, чтобы не поймать истечение в полёте.
+    return int(tokens.get("expires_at") or 0) - 300_000 < time.time() * 1000
+
+
 def auth_header() -> str:
     if not TOKENS.exists():
         raise RuntimeError(
             "Нет ~/.plaud/tokens.json. Выполни: npm i -g @plaud-ai/cli && plaud login"
         )
     tokens = json.loads(TOKENS.read_text(encoding="utf-8"))
-    # expires_at в миллисекундах; за 5 минут до истечения просим их CLI обновить токен.
-    if int(tokens.get("expires_at") or 0) - 300_000 < time.time() * 1000:
+    if expired(tokens):
         cli = shutil.which("plaud")
         if not cli:
             raise RuntimeError(
                 "access_token истёк, а CLI `plaud` не найден в PATH. Выполни: plaud login"
             )
+        # Обновление делегируем их CLI; удалось ли — судим по файлу токенов,
+        # а не по коду возврата: молча провалившийся refresh раньше уводил в 401.
         subprocess.run([cli, "me"], capture_output=True, timeout=120)
         tokens = json.loads(TOKENS.read_text(encoding="utf-8"))
+        if expired(tokens):
+            raise RuntimeError(
+                "Токены Plaud истекли, и refresh через CLI не помог — выполни `plaud login`."
+            )
     return f"{tokens.get('token_type') or 'Bearer'} {tokens['access_token']}"
 
 
@@ -135,6 +145,12 @@ def main() -> int:
         assert name.startswith("2026-08-05__") and name.endswith("__abc123.mp3"), name
         assert "/" not in name and ":" not in name, name
         assert human_duration(2_420_000) == "40:20", human_duration(2_420_000)
+        assert expired({"expires_at": 0}) is True
+        assert expired({}) is True
+        fresh_ms = int((time.time() + 3600) * 1000)
+        assert expired({"expires_at": fresh_ms}) is False
+        # Запас 5 минут: токен, живущий 4 минуты, уже считается протухшим.
+        assert expired({"expires_at": int((time.time() + 240) * 1000)}) is True
         print("ok")
         return 0
 

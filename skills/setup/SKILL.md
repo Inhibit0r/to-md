@@ -16,7 +16,7 @@ python "${CLAUDE_PLUGIN_ROOT}/scripts/to_md.py" --doctor --data "${CLAUDE_PLUGIN
 
 `python` не нашёлся → повтори с `python3`. Не нашёлся ни один → пользователю нужен Python 3.10+, дальше идти некуда.
 
-Готово, когда: JSON получен и ты знаешь `os`, `arch`, `python_ok`, `whisper`, `anydoc`, `cuda_pkgs`, `nvidia`, `data`, `weights`.
+Готово, когда: JSON получен и ты знаешь `os`, `arch`, `python_ok`, `whisper`, `anydoc`, `cuda_pkgs`, `nvidia`, `plaud_token`, `data`, `weights`.
 
 ## 2. План под эту машину
 
