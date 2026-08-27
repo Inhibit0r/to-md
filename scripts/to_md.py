@@ -319,9 +319,30 @@ def resolve_data(arg):
     return pathlib.Path.home() / ".to-md"
 
 
+def whisper_interpreter(cli):
+    """Веса тянет питон, которому принадлежит whisper: под PEP 668 он живёт в отдельном окружении."""
+    import importlib.util
+
+    if not cli:
+        return ""
+    try:
+        head = pathlib.Path(cli).read_text(encoding="utf-8", errors="replace").splitlines()[:1]
+    except OSError:
+        head = []
+    if head and head[0].startswith("#!"):
+        exe = head[0][2:].strip().split(" ")[0]
+        if "python" in pathlib.Path(exe).name and pathlib.Path(exe).exists():
+            return exe
+    try:
+        return sys.executable if importlib.util.find_spec("faster_whisper") else ""
+    except (ImportError, ValueError):
+        return ""
+
+
 def doctor(data):
     """Что установщику надо знать о машине. Истина о среде — сама среда, не файл-маркер."""
     import importlib.util
+    import sysconfig
 
     def have(mod):
         try:
@@ -346,6 +367,9 @@ def doctor(data):
         "plaud": have("requests"),
         "plaud_token": plaud_token_fresh(),
         "nvidia": bool(shutil.which("nvidia-smi")),
+        # PEP 668: интерпретатор помечен как управляемый системой — голый `pip install` откажет.
+        "managed": (pathlib.Path(sysconfig.get_path("stdlib")) / "EXTERNALLY-MANAGED").exists(),
+        "whisper_python": whisper_interpreter(whisper),
         "data": str(data),
         "weights": (data / "models" / "large-v3-turbo" / "model.bin").exists(),
         "ready": bool(whisper) and anydoc_ok and python_ok,
@@ -745,11 +769,21 @@ def selftest():
         "plaud",
         "plaud_token",
         "nvidia",
+        "managed",
+        "whisper_python",
         "data",
         "weights",
         "ready",
     }, sorted(d)
     assert d["python_ok"] is (sys.version_info >= (3, 10))
+    # PEP 668: на таком интерпретаторе голый `pip install` откажет — установщик обязан знать заранее.
+    import sysconfig
+
+    marker = pathlib.Path(sysconfig.get_path("stdlib")) / "EXTERNALLY-MANAGED"
+    assert d["managed"] is marker.exists()
+    # Веса тянет тот питон, которому принадлежит whisper, а не обязательно текущий.
+    assert d["whisper_python"] == "" or pathlib.Path(d["whisper_python"]).exists()
+    assert not (d["whisper_python"] and not d["whisper"])
     assert d["weights"] is False
     assert d["ready"] is (bool(d["whisper"]) and d["anydoc"] and d["python_ok"])
 
