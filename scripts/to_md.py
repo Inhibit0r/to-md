@@ -1,6 +1,7 @@
 """to-md: один вход для медиа, документов и фотографий.
 
   to_md.py <in> --out <out> [--json]     основной прогон; --json отдаёт план батчей фото
+  to_md.py --bootstrap [--data <dir>]    поставить своё окружение и показать доктора
   to_md.py --doctor [--data <dir>]       JSON о среде
   to_md.py --escalate <out/raw>          файлы с метками [неразборчиво] от порога
   to_md.py --collect <out> [--in <dir>]  пересборка сводного файла и реестра
@@ -48,6 +49,11 @@ TITLE_ARTIFACTS = (  # титры, вшитые в обучающие данны
     " корректор а ",
     " редактор а ",
 )
+
+# Установка: to-md держит собственный интерпретатор, чтобы не зависеть от системного.
+UV_INSTALLER = "https://astral.sh/uv/install.sh"
+VENV_PYTHON = "3.12"
+VENV_PKGS = ("whisper-ctranslate2", "firecrawl-anydoc", "requests")
 
 MEDIA_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mp3", ".wav", ".m4a"}
 DOC_EXT = {
@@ -319,30 +325,72 @@ def resolve_data(arg):
     return pathlib.Path.home() / ".to-md"
 
 
-def whisper_interpreter(cli):
-    """Веса тянет питон, которому принадлежит whisper: под PEP 668 он живёт в отдельном окружении."""
-    import importlib.util
+def venv_python(data):
+    """Интерпретатор to-md. Системный нужен ровно на то, чтобы досюда дойти."""
+    sub, exe = ("Scripts", "python.exe") if os.name == "nt" else ("bin", "python")
+    py = pathlib.Path(data) / "venv" / sub / exe
+    return py if py.exists() else None
 
-    if not cli:
-        return ""
+
+def whisper_cli():
+    """CLI лежит рядом со своим интерпретатором: venv не активируется, на PATH его нет."""
+    name = "whisper-ctranslate2.exe" if os.name == "nt" else "whisper-ctranslate2"
+    near = pathlib.Path(sys.executable).parent / name
+    return str(near) if near.exists() else (shutil.which("whisper-ctranslate2") or "")
+
+
+def reexec_into_venv(data):
+    """Уходим в свой venv сами: системный python бывает managed (PEP 668) или сломан."""
+    if os.environ.get("TO_MD_IN_VENV"):
+        return
+    py = venv_python(data)
+    if py is None:
+        return
     try:
-        head = pathlib.Path(cli).read_text(encoding="utf-8", errors="replace").splitlines()[:1]
-    except OSError:
-        head = []
-    if head and head[0].startswith("#!"):
-        exe = head[0][2:].strip().split(" ")[0]
-        if "python" in pathlib.Path(exe).name and pathlib.Path(exe).exists():
-            return exe
-    try:
-        return sys.executable if importlib.util.find_spec("faster_whisper") else ""
-    except (ImportError, ValueError):
-        return ""
+        if pathlib.Path(sys.executable).resolve() == py.resolve():
+            return
+        os.execve(
+            str(py),
+            [str(py), os.path.abspath(__file__), *sys.argv[1:]],
+            dict(os.environ, TO_MD_IN_VENV="1"),
+        )
+    except OSError as e:  # остаёмся на текущем питоне: пусть доктор покажет правду
+        print(f"! не удалось перейти в {py}: {e}", file=sys.stderr)
+
+
+def ensure_uv():
+    """uv приносит собственный standalone-python, поэтому venv не наследует поломки системного."""
+    uv = shutil.which("uv")
+    if uv:
+        return uv
+    local = pathlib.Path.home() / ".local" / "bin" / "uv"
+    if local.exists():
+        return str(local)
+    print("uv не найден — ставлю официальным инсталлером astral.sh")
+    subprocess.run(["sh", "-c", f"curl -LsSf {UV_INSTALLER} | sh"], check=True)
+    if not local.exists():
+        raise RuntimeError("uv не установился; поставь вручную по docs.astral.sh/uv")
+    return str(local)
+
+
+def bootstrap(data):
+    """Вся установка одной командой: свой python и пакеты в него. Из системы берётся только uv."""
+    data = pathlib.Path(data)
+    uv = ensure_uv()
+    venv = data / "venv"
+    print(f"venv: {venv} (python {VENV_PYTHON} от uv)")
+    subprocess.run([uv, "venv", "--python", VENV_PYTHON, str(venv)], check=True)
+    py = venv_python(data)
+    if py is None:
+        raise RuntimeError(f"venv не создался: {venv}")
+    print(f"пакеты: {', '.join(VENV_PKGS)}")
+    subprocess.run([uv, "pip", "install", "--python", str(py), *VENV_PKGS], check=True)
+    return py
 
 
 def doctor(data):
     """Что установщику надо знать о машине. Истина о среде — сама среда, не файл-маркер."""
     import importlib.util
-    import sysconfig
 
     def have(mod):
         try:
@@ -351,7 +399,7 @@ def doctor(data):
             return False
 
     data = pathlib.Path(data)
-    whisper = shutil.which("whisper-ctranslate2") or ""
+    whisper = whisper_cli()
     anydoc_ok = have("anydoc")
     python_ok = sys.version_info >= (3, 10)
     return {
@@ -367,9 +415,8 @@ def doctor(data):
         "plaud": have("requests"),
         "plaud_token": plaud_token_fresh(),
         "nvidia": bool(shutil.which("nvidia-smi")),
-        # PEP 668: интерпретатор помечен как управляемый системой — голый `pip install` откажет.
-        "managed": (pathlib.Path(sysconfig.get_path("stdlib")) / "EXTERNALLY-MANAGED").exists(),
-        "whisper_python": whisper_interpreter(whisper),
+        # Пусто до --bootstrap; непусто — значит доктор уже говорит от лица рабочего окружения.
+        "venv": str(venv_python(data) or ""),
         "data": str(data),
         "weights": (data / "models" / "large-v3-turbo" / "model.bin").exists(),
         "ready": bool(whisper) and anydoc_ok and python_ok,
@@ -464,7 +511,7 @@ def run_whisper(
     if device == "cuda":
         cuda_dlls()
     cmd = [
-        "whisper-ctranslate2",
+        whisper_cli(),
         *model_args,
         *(["--hotwords", hotwords] if hotwords else []),
         # Перенос контекста между окнами каскадит повторы («Угу.»×20,
@@ -769,21 +816,18 @@ def selftest():
         "plaud",
         "plaud_token",
         "nvidia",
-        "managed",
-        "whisper_python",
+        "venv",
         "data",
         "weights",
         "ready",
     }, sorted(d)
     assert d["python_ok"] is (sys.version_info >= (3, 10))
-    # PEP 668: на таком интерпретаторе голый `pip install` откажет — установщик обязан знать заранее.
-    import sysconfig
-
-    marker = pathlib.Path(sysconfig.get_path("stdlib")) / "EXTERNALLY-MANAGED"
-    assert d["managed"] is marker.exists()
-    # Веса тянет тот питон, которому принадлежит whisper, а не обязательно текущий.
-    assert d["whisper_python"] == "" or pathlib.Path(d["whisper_python"]).exists()
-    assert not (d["whisper_python"] and not d["whisper"])
+    # Пустой путь или существующий файл — «есть venv» не бывает наполовину.
+    assert d["venv"] == "" or pathlib.Path(d["venv"]).exists()
+    # Несуществующая data не может дать venv: доктор не выдумывает окружение.
+    assert d["venv"] == ""
+    # whisper зовётся по абсолютному пути, иначе из venv его не видно.
+    assert d["whisper"] == "" or pathlib.Path(d["whisper"]).exists()
     assert d["weights"] is False
     assert d["ready"] is (bool(d["whisper"]) and d["anydoc"] and d["python_ok"])
 
@@ -875,7 +919,21 @@ def main(argv):
     if not argv:
         print(__doc__)
         return 2
+    if argv[0] == "--bootstrap":
+        data = resolve_data(arg_of(argv, "--data"))
+        py = bootstrap(data)
+        # Отчитывается уже новое окружение: иначе доктор соврёт про пакеты, которых у него нет.
+        try:
+            os.execve(
+                str(py),
+                [str(py), os.path.abspath(__file__), "--doctor", "--data", str(data)],
+                dict(os.environ, TO_MD_IN_VENV="1"),
+            )
+        except OSError as e:
+            print(f"! venv собран, но доктор из него не запустился: {e}", file=sys.stderr)
+            return 1
     if argv[0] == "--doctor":
+        reexec_into_venv(resolve_data(arg_of(argv, "--data")))
         print(
             json.dumps(
                 doctor(resolve_data(arg_of(argv, "--data"))),
@@ -895,6 +953,7 @@ def main(argv):
         print(__doc__)
         return 2
 
+    reexec_into_venv(resolve_data(arg_of(argv, "--data")))
     report = dispatch(
         argv[0],
         arg_of(argv, "--out") or "out",
