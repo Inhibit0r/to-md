@@ -419,7 +419,13 @@ def doctor(data):
         "venv": str(venv_python(data) or ""),
         "data": str(data),
         "weights": (data / "models" / "large-v3-turbo" / "model.bin").exists(),
-        "ready": bool(whisper) and anydoc_ok and python_ok,
+        # На Windows глобальная установка штатна. На macOS и Linux системный python
+        # бывает managed или сломан, поэтому рабочим считается только своё окружение:
+        # иначе остатки прежних установок выдают ready и уводят обратно на хрупкий путь.
+        "ready": bool(whisper)
+        and anydoc_ok
+        and python_ok
+        and (os.name == "nt" or venv_python(data) is not None),
     }
 
 
@@ -829,7 +835,14 @@ def selftest():
     # whisper зовётся по абсолютному пути, иначе из venv его не видно.
     assert d["whisper"] == "" or pathlib.Path(d["whisper"]).exists()
     assert d["weights"] is False
-    assert d["ready"] is (bool(d["whisper"]) and d["anydoc"] and d["python_ok"])
+    # Без своего venv на POSIX ready не выдаётся, даже если пакеты нашлись в системном python.
+    assert d["ready"] is (
+        bool(d["whisper"])
+        and d["anydoc"]
+        and d["python_ok"]
+        and (os.name == "nt" or bool(d["venv"]))
+    )
+    assert d["ready"] is False
 
     # Детектор порчи: чистый диалог молчит, каждая патология ловится с якорем.
     ok_segs = [
