@@ -10,7 +10,7 @@ disable-model-invocation: true
 
 Материал приходит **черновиком**: у медиа модель путает имена собственные (**ослышки**), у снимков часть текста нечитаема. Скилл доводит его до чистовика.
 
-Вход — путь из просьбы. Не назван → `./in`. Выход — `./out`, пофайловые md в `./out/raw/`.
+Вход — путь или ссылка из просьбы. Не назван → `./in`. Выход — `./out`, пофайловые md в `./out/raw/`.
 
 ## 0. Среда
 
@@ -34,7 +34,15 @@ python "${CLAUDE_PLUGIN_ROOT}/scripts/to_md.py" --doctor --data "${CLAUDE_PLUGIN
 python "${CLAUDE_PLUGIN_ROOT}/scripts/fetch_plaud.py" --latest 1 --out in
 ```
 
-Затем один прогон делает всю детерминированную работу:
+Ссылка (YouTube, Instagram, TikTok, VK — всё, что знает yt-dlp) идёт первым аргументом вместо папки: скрипт сам кладёт файл в `in/` и обрабатывает только его. Язык ролика чаще не русский — не забудь `--lang`:
+
+```bash
+python "${CLAUDE_PLUGIN_ROOT}/scripts/to_md.py" "<url>" --out out --data "${CLAUDE_PLUGIN_DATA}" --lang en --json
+```
+
+Скрипт упал одной строкой на stderr → причина там: нет yt-dlp (→ `/to-md:setup`), приватное видео, сеть. Сеть закрыта → прокси в `TO_MD_PROXY`, загрузчик подхватывает её сам.
+
+Папка или файл — один прогон делает всю детерминированную работу:
 
 ```bash
 python "${CLAUDE_PLUGIN_ROOT}/scripts/to_md.py" in --out out --data "${CLAUDE_PLUGIN_DATA}" --json

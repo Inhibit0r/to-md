@@ -32,7 +32,7 @@
 
 ## Форматы
 
-Записи: mp4, mov, mkv, webm, avi, m4v, mp3, wav, m4a.
+Записи: mp4, mov, mkv, webm, avi, m4v, mp3, wav, m4a. Ссылки: YouTube, Instagram, TikTok, VK и всё, что знает yt-dlp, — дорожка скачивается в `in/` и идёт тем же путём, ffmpeg не нужен.
 
 Документы: pdf, doc, docx, docm, ppt, pptx, pptm, pps, ppsx, pot, xls, xlsx, xlsm, xlsb, odt, ods, odp, rtf, epub, csv.
 
@@ -79,6 +79,7 @@ type: задача
 
 ```bash
 python scripts/to_md.py in --out out              # дефолт: VAD включён, hotwords выключены
+python scripts/to_md.py "<url>" --out out --lang en  # ссылка: файл ляжет в in/ и обработается
 python scripts/to_md.py in --out out --vad False  # если дефолтный прогон теряет куски
 python scripts/to_md.py --doctor                  # что установлено на этой машине
 python scripts/to_md.py --escalate out/raw        # снимки, которые стоит перечитать

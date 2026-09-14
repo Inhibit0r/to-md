@@ -1,6 +1,6 @@
 {
   "name": "to-md",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Медиа, документы и фотографии в markdown: whisper локально, anydoc для документов, зрение модели для снимков.",
   "author": {
     "name": "Inhibit0r",

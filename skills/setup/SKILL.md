@@ -16,7 +16,7 @@ python "${CLAUDE_PLUGIN_ROOT}/scripts/to_md.py" --doctor --data "${CLAUDE_PLUGIN
 
 `python` не нашёлся → повтори с `python3`. Не нашёлся ни один → ставить нечем, скажи об этом и остановись.
 
-Готово, когда: JSON получен и ты знаешь `os`, `arch`, `venv`, `whisper`, `anydoc`, `plaud`, `nvidia`, `data`, `weights`, `ready`.
+Готово, когда: JSON получен и ты знаешь `os`, `arch`, `venv`, `whisper`, `anydoc`, `plaud`, `ytdlp`, `nvidia`, `data`, `weights`, `ready`.
 
 ## 2. План под эту машину
 
@@ -25,7 +25,7 @@ python "${CLAUDE_PLUGIN_ROOT}/scripts/to_md.py" --doctor --data "${CLAUDE_PLUGIN
 `ready: false` → покажи пользователю, что произойдёт, и **дождись согласия**:
 
 - в `<data>/venv` создаётся отдельный python 3.12, который uv скачивает сам;
-- в него ставятся `whisper-ctranslate2`, `firecrawl-anydoc`, `requests`;
+- в него ставятся `whisper-ctranslate2`, `firecrawl-anydoc`, `requests`, `yt-dlp` (ссылки на YouTube, Instagram и прочие медиаресурсы);
 - системный python и его пакеты не трогаются;
 - если uv нет, он ставится официальным инсталлером astral.sh в `~/.local/bin`.
 
@@ -48,6 +48,10 @@ uv pip install --python "<venv>" nvidia-cublas-cu12 nvidia-cudnn-cu12
 ```
 
 Не сработало → покажи вывод целиком и остановись. Не ставь эти пакеты в системный python: ровно от этого venv и защищает, а на managed-интерпретаторе (PEP 668, штатное состояние для python из Homebrew и большинства дистрибутивов Linux) установка всё равно откажет.
+
+`ytdlp: false` при `ready: true` — окружение собрано до появления загрузчика ссылок: добери `yt-dlp` той же командой `uv pip install`, на Windows без venv — `pip install yt-dlp`.
+
+YouTube без JS-рантайма yt-dlp объявил устаревшим: пока работает, но часть форматов может пропасть. Ссылки на YouTube ходят часто → предложи поставить `deno` (winget / brew), yt-dlp найдёт его на PATH сам. ffmpeg не нужен: дорожка качается как есть.
 
 Готово, когда: доктор даёт `ready: true`.
 

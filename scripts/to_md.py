@@ -1,6 +1,7 @@
 """to-md: один вход для медиа, документов и фотографий.
 
   to_md.py <in> --out <out> [--json]     основной прогон; --json отдаёт план батчей фото
+  to_md.py <url> --out <out> [--in <dir>] ссылка (YouTube, Instagram…) → файл в <dir>, затем прогон
   to_md.py --bootstrap [--data <dir>]    поставить своё окружение и показать доктора
   to_md.py --doctor [--data <dir>]       JSON о среде
   to_md.py --escalate <out/raw>          файлы с метками [неразборчиво] от порога
@@ -53,7 +54,11 @@ TITLE_ARTIFACTS = (  # титры, вшитые в обучающие данны
 # Установка: to-md держит собственный интерпретатор, чтобы не зависеть от системного.
 UV_INSTALLER = "https://astral.sh/uv/install.sh"
 VENV_PYTHON = "3.12"
-VENV_PKGS = ("whisper-ctranslate2", "firecrawl-anydoc", "requests")
+VENV_PKGS = ("whisper-ctranslate2", "firecrawl-anydoc", "requests", "yt-dlp")
+
+# Ссылка на входе: yt-dlp тянет аудиодорожку как есть (YouTube, Instagram, TikTok, VK…).
+# Слияние дорожек не нужно, поэтому ffmpeg не требуется — whisper читает контейнер через PyAV.
+URL_FORMAT = "ba[ext=m4a]/ba/b"
 
 MEDIA_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mp3", ".wav", ".m4a"}
 DOC_EXT = {
@@ -414,6 +419,8 @@ def doctor(data):
         # Транзитивно он не приезжает: huggingface-hub требует его лишь под extra gradio.
         "plaud": have("requests"),
         "plaud_token": plaud_token_fresh(),
+        # Нужен только ссылкам на входе, поэтому в ready тоже не входит.
+        "ytdlp": have("yt_dlp"),
         "nvidia": bool(shutil.which("nvidia-smi")),
         # Пусто до --bootstrap; непусто — значит доктор уже говорит от лица рабочего окружения.
         "venv": str(venv_python(data) or ""),
@@ -491,6 +498,31 @@ def is_readable_media(path):
             return bool(container.streams.audio)
     except Exception:
         return False
+
+
+def fetch_url(url, indir):
+    """Ссылка → медиафайл в in/. Дальше он идёт обычным путём, реестр судит по содержимому."""
+    try:
+        import yt_dlp
+    except ImportError:
+        raise RuntimeError("yt-dlp не установлен: /to-md:setup") from None
+    indir = pathlib.Path(indir)
+    indir.mkdir(parents=True, exist_ok=True)
+    opts = {
+        "format": URL_FORMAT,
+        "outtmpl": str(indir / "%(title).120B [%(id)s].%(ext)s"),
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,  # stdout отдан отчёту --json
+    }
+    if os.environ.get("TO_MD_PROXY"):
+        opts["proxy"] = os.environ["TO_MD_PROXY"]
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        path = pathlib.Path(ydl.prepare_filename(ydl.extract_info(url, download=True)))
+    if classify(path) != "media":
+        raise RuntimeError(f"скачался {path.name}, а это не медиа")
+    return path
 
 
 def build_doc(source_path, text):
@@ -821,12 +853,16 @@ def selftest():
         "cuda_pkgs",
         "plaud",
         "plaud_token",
+        "ytdlp",
         "nvidia",
         "venv",
         "data",
         "weights",
         "ready",
     }, sorted(d)
+    # Ссылка узнаётся по схеме; всё прочее — путь. Причина отказа — одной строкой на stderr.
+    assert "https://x".startswith(("http://", "https://"))
+    assert URL_FORMAT.split("/")[-1] == "b", URL_FORMAT  # последний фолбэк — любой файл с дорожкой
     assert d["python_ok"] is (sys.version_info >= (3, 10))
     # Пустой путь или существующий файл — «есть venv» не бывает наполовину.
     assert d["venv"] == "" or pathlib.Path(d["venv"]).exists()
@@ -943,7 +979,9 @@ def main(argv):
                 dict(os.environ, TO_MD_IN_VENV="1"),
             )
         except OSError as e:
-            print(f"! venv собран, но доктор из него не запустился: {e}", file=sys.stderr)
+            print(
+                f"! venv собран, но доктор из него не запустился: {e}", file=sys.stderr
+            )
             return 1
     if argv[0] == "--doctor":
         reexec_into_venv(resolve_data(arg_of(argv, "--data")))
@@ -967,8 +1005,17 @@ def main(argv):
         return 2
 
     reexec_into_venv(resolve_data(arg_of(argv, "--data")))
+    src = argv[0]
+    if src.startswith(("http://", "https://")):
+        try:
+            src = fetch_url(src, arg_of(argv, "--in") or "in")
+        except (
+            Exception
+        ) as e:  # сеть, приватное видео, нет yt-dlp — причина в одну строку
+            print(f"! {argv[0]}: {e}", file=sys.stderr)
+            return 1
     report = dispatch(
-        argv[0],
+        src,
         arg_of(argv, "--out") or "out",
         resolve_data(arg_of(argv, "--data")),
         arg_of(argv, "--lang") or "ru",
