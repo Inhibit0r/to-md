@@ -9,6 +9,7 @@
   to_md.py --selftest                    самопроверка
 
 Ручки основного прогона: --data, --lang, --hotwords, --device, --gap, --vad.
+Документы ложатся md рядом с исходником; медиа и фото — в <out>/raw/, их чистовики — в <out>.
 """
 
 import collections
@@ -308,6 +309,39 @@ def collect(out, indir="in"):
     return len(parts)
 
 
+def is_beside_md(path):
+    """md, чей source — соседний существующий файл, — наш вывод, а не вход."""
+    path = pathlib.Path(path)
+    if path.suffix.lower() != ".md":
+        return False
+    try:
+        src = source_of(path.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return False
+    return bool(src) and (path.parent / src).is_file()
+
+
+def beside(src):
+    """Куда ляжет md документа. Чужой md с тем же именем не затирается никогда.
+
+    Основное имя занято чужим файлом (заметка «план.md» рядом с «план.docx») →
+    к имени добавляется расширение исходника. Заняты оба → None, решает человек.
+    """
+    src = pathlib.Path(src)
+    for md in (
+        src.with_suffix(".md"),
+        src.with_name(f"{src.stem}-{src.suffix.lstrip('.').lower()}.md"),
+    ):
+        if not md.exists():
+            return md
+        try:
+            if source_of(md.read_text(encoding="utf-8", errors="replace")) == src.name:
+                return md
+        except OSError:
+            pass
+    return None
+
+
 def md_names(files):
     """Один входной файл — один md. Основы совпали (отчёт.pdf и отчёт.docx) — расширение остаётся в имени.
 
@@ -599,7 +633,6 @@ def dispatch(
 ):
     indir, out = pathlib.Path(indir), pathlib.Path(out)
     raw = out / "raw"
-    raw.mkdir(parents=True, exist_ok=True)
     files = (
         [indir]
         if indir.is_file()
@@ -616,7 +649,11 @@ def dispatch(
         if kind is None:
             continue
         if kind == "text":
-            report["text"].append(f.name)
+            if not is_beside_md(f):
+                report["text"].append(f.name)
+            continue
+        if kind == "doc":
+            todo["doc"].append(f)
             continue
         key = digest(f)
         if done(reg, key, out):
@@ -629,21 +666,31 @@ def dispatch(
             continue
         todo[kind].append((f, key))
 
-    for f, key in todo["doc"]:
+    # Документ — итог сразу, второго этапа у него нет: md ложится рядом с исходником,
+    # out/ и реестр ему не нужны. Свежесть — по времени правки: исходник новее md → переделать.
+    for f in todo["doc"]:
+        md = beside(f)
+        if md is None:
+            ext = f.suffix.lstrip(".").lower()
+            report["skipped"].append(
+                {
+                    "src": f.name,
+                    "why": f"имена {f.stem}.md и {f.stem}-{ext}.md заняты чужими файлами",
+                }
+            )
+            continue
+        if md.exists() and md.stat().st_mtime >= f.stat().st_mtime:
+            report["cached"].append(f.name)
+            continue
         text, why = convert_doc(f)
         if text is None:
             report["skipped"].append({"src": f.name, "why": why})
             continue
-        md = raw / names[f]
         md.write_text(build_doc(f, text), encoding="utf-8")
-        reg[key] = {
-            "src": f.name,
-            "md": f"raw/{md.name}",
-            "at": datetime.date.today().isoformat(),
-        }
-        report["converted"].append(
-            {"src": f.name, "md": f"raw/{md.name}", "kind": "doc"}
-        )
+        report["converted"].append({"src": f.name, "md": str(md), "kind": "doc"})
+
+    if todo["media"] or todo["photo"]:
+        raw.mkdir(parents=True, exist_ok=True)
 
     if todo["media"]:
         keys = {f: k for f, k in todo["media"]}
@@ -698,7 +745,9 @@ def dispatch(
 
     # По фото скрипт не считает ничего: отдаёт план, работу делают субагенты.
     report["photos"] = plan_photos([str(f) for f, _ in todo["photo"]])
-    save_registry(out, reg)
+    # Реестр пишут только медиа: фото регистрирует --collect, документам он не нужен.
+    if todo["media"]:
+        save_registry(out, reg)
     return report
 
 
@@ -795,6 +844,46 @@ def selftest():
     assert names[pathlib.Path("проба.docx")] == "проба-docx.md", names
     assert len(set(names.values())) == 3, names
 
+    # Документ — итог сразу: md рядом с исходником, без out/, без реестра, чужое не затирается.
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = pathlib.Path(tmp)
+        doc = tmp / "план.csv"
+        doc.write_text("имя,цена\nчай,120\n", encoding="utf-8")
+        mine = "# мои заметки\n"
+        (tmp / "план.md").write_text(mine, encoding="utf-8")
+        rep = dispatch(tmp, tmp / "out", tmp / "data")
+        side = tmp / "план-csv.md"
+        assert rep["converted"] == [
+            {"src": "план.csv", "md": str(side), "kind": "doc"}
+        ], rep
+        assert (tmp / "план.md").read_text(encoding="utf-8") == mine, "чужой md затёрт"
+        assert source_of(side.read_text(encoding="utf-8")) == "план.csv"
+        assert not (tmp / "out").exists(), "документ не заводит out/"
+        # Повтор: свой md — не вход и не повод переделывать; чужой md остаётся входом.
+        again = dispatch(tmp, tmp / "out", tmp / "data")
+        assert again["cached"] == ["план.csv"] and not again["converted"], again
+        assert again["text"] == ["план.md"], again
+        # Исходник правили позже md → переделка; одиночный файл видит соседей так же, как папка.
+        later = side.stat().st_mtime + 10
+        os.utime(doc, (later, later))
+        assert dispatch(doc, tmp / "out", tmp / "data")["converted"], "не переделан"
+        # Оба имени заняты чужими → не пишем ничего и говорим почему.
+        other = tmp / "отчёт.csv"
+        other.write_text("a,b\n1,2\n", encoding="utf-8")
+        (tmp / "отчёт.md").write_text(mine, encoding="utf-8")
+        (tmp / "отчёт-csv.md").write_text(mine, encoding="utf-8")
+        rep = dispatch(other, tmp / "out", tmp / "data")
+        assert rep["skipped"] and not rep["converted"], rep
+        assert (tmp / "отчёт-csv.md").read_text(encoding="utf-8") == mine
+        assert not (tmp / "out").exists(), rep
+
+    # Фото по-прежнему идут в мастерскую out/raw/: у них есть чистовик.
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = pathlib.Path(tmp)
+        (tmp / "IMG.jpg").write_bytes(b"x")
+        rep = dispatch(tmp, tmp / "out", tmp / "data")
+        assert rep["photos"]["batches"] and (tmp / "out" / "raw").is_dir(), rep
+
     assert pick_device("cpu") == "cpu" and pick_device("cuda") == "cuda"
     assert pick_device("auto") in ("cuda", "cpu")
     if platform.system() == "Darwin":
@@ -862,7 +951,9 @@ def selftest():
     }, sorted(d)
     # Ссылка узнаётся по схеме; всё прочее — путь. Причина отказа — одной строкой на stderr.
     assert "https://x".startswith(("http://", "https://"))
-    assert URL_FORMAT.split("/")[-1] == "b", URL_FORMAT  # последний фолбэк — любой файл с дорожкой
+    assert URL_FORMAT.split("/")[-1] == "b", (
+        URL_FORMAT
+    )  # последний фолбэк — любой файл с дорожкой
     assert d["python_ok"] is (sys.version_info >= (3, 10))
     # Пустой путь или существующий файл — «есть venv» не бывает наполовину.
     assert d["venv"] == "" or pathlib.Path(d["venv"]).exists()
@@ -1037,7 +1128,7 @@ def main(argv):
         for t in report["text"]:
             print(f"= {t}: конвертация не нужна, читается напрямую")
         if report["cached"]:
-            print(f"= уже в реестре: {len(report['cached'])}")
+            print(f"= уже сделано: {len(report['cached'])}")
         if report["photos"].get("batches"):
             print(
                 f"фото: {report['photos']['mode']}, батчей {len(report['photos']['batches'])}"
