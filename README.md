@@ -32,7 +32,7 @@
 
 ## Форматы
 
-Записи: mp4, mov, mkv, webm, avi, m4v, mp3, wav, m4a. Ссылки: YouTube, Instagram, TikTok, VK и всё, что знает yt-dlp, — дорожка скачивается в `in/` и идёт тем же путём, ffmpeg не нужен.
+Записи: mp4, mov, mkv, webm, avi, m4v, mp3, wav, m4a, а также ogg, oga и opus — голосовые Telegram. Ссылки: YouTube, Instagram, TikTok, VK и всё, что знает yt-dlp, — дорожка скачивается в `in/` и идёт тем же путём, ffmpeg не нужен.
 
 Документы: pdf, doc, docx, docm, ppt, pptx, pptm, pps, ppsx, pot, xls, xlsx, xlsm, xlsb, odt, ods, odp, rtf, epub, csv.
 

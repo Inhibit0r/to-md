@@ -62,6 +62,8 @@ VENV_PKGS = ("whisper-ctranslate2", "firecrawl-anydoc", "requests", "yt-dlp")
 URL_FORMAT = "ba[ext=m4a]/ba/b"
 
 MEDIA_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mp3", ".wav", ".m4a"}
+# Голосовые Telegram: Opus в контейнере Ogg. PyAV читает их сам, ffmpeg не нужен.
+MEDIA_EXT |= {".ogg", ".oga", ".opus"}
 DOC_EXT = {
     ".pdf",
     ".doc",
@@ -789,6 +791,8 @@ def selftest():
     assert doc.rstrip().endswith("Второй абзац."), doc[-40:]
 
     assert classify("a.MP4") == "media" and classify("b.docm") == "doc"
+    assert classify("voice.oga") == "media" and classify("v.OGG") == "media"
+    assert classify("v.opus") == "media"
     assert classify("c.HEIC") == "photo" and classify("d.yaml") == "text"
     assert classify("e.zip") is None
 
