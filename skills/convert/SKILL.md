@@ -1,7 +1,6 @@
 ---
 name: convert
-description: Медиа, документы и фотографии в markdown, с summary для записей и сводным файлом для снимков.
-disable-model-invocation: true
+description: Только по явному вызову пользователя (/to-md:convert); сам не запускай. Медиа, документы и фотографии в markdown, с summary для записей и сводным файлом для снимков.
 ---
 
 # to-md

@@ -1,7 +1,6 @@
 ---
 name: setup
-description: Ставит зависимости to-md под текущую машину и кладёт веса whisper.
-disable-model-invocation: true
+description: Только по явному вызову пользователя (/to-md:setup); сам не запускай. Ставит зависимости to-md под текущую машину и кладёт веса whisper.
 ---
 
 # Установка to-md
