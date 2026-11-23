@@ -9,8 +9,10 @@ to-md держит собственный интерпретатор в `<data>/
 
 ## 1. Что за машина
 
+Определи абсолютный путь к корню установленного плагина по пути этого `skills/setup/SKILL.md`: поднимись на три уровня. В Claude Code можно взять подставленный `${CLAUDE_PLUGIN_ROOT}`, если там есть `scripts/to_md.py`. В Codex бери путь навыка из каталога текущей сессии. Ниже `ROOT` — этот абсолютный путь.
+
 ```bash
-python "${CLAUDE_PLUGIN_ROOT}/scripts/to_md.py" --doctor --data "${CLAUDE_PLUGIN_DATA}"
+python "${ROOT}/scripts/to_md.py" --doctor
 ```
 
 `python` не нашёлся → повтори с `python3`. Не нашёлся ни один → ставить нечем, скажи об этом и остановись.
@@ -35,7 +37,7 @@ python "${CLAUDE_PLUGIN_ROOT}/scripts/to_md.py" --doctor --data "${CLAUDE_PLUGIN
 ## 3. Установка
 
 ```bash
-python "${CLAUDE_PLUGIN_ROOT}/scripts/to_md.py" --bootstrap --data "${CLAUDE_PLUGIN_DATA}"
+python "${ROOT}/scripts/to_md.py" --bootstrap
 ```
 
 Одна команда делает всё и заканчивает тем, что печатает доктора уже из нового окружения.

@@ -5,7 +5,7 @@
   to_md.py --bootstrap [--data <dir>]    поставить своё окружение и показать доктора
   to_md.py --doctor [--data <dir>]       JSON о среде
   to_md.py --escalate <out/raw>          файлы с метками [неразборчиво] от порога
-  to_md.py --collect <out> [--in <dir>]  пересборка сводного файла и реестра
+  to_md.py --collect <out> [--in <path>] пересборка сводного файла и реестра
   to_md.py --selftest                    самопроверка
 
 Ручки основного прогона: --data, --lang, --hotwords, --device, --gap, --vad.
@@ -56,6 +56,7 @@ TITLE_ARTIFACTS = (  # титры, вшитые в обучающие данны
 UV_INSTALLER = "https://astral.sh/uv/install.sh"
 VENV_PYTHON = "3.12"
 VENV_PKGS = ("whisper-ctranslate2", "firecrawl-anydoc", "requests", "yt-dlp")
+MODEL = "large-v3-turbo"
 
 # Ссылка на входе: yt-dlp тянет аудиодорожку как есть (YouTube, Instagram, TikTok, VK…).
 # Слияние дорожек не нужно, поэтому ffmpeg не требуется — whisper читает контейнер через PyAV.
@@ -294,19 +295,23 @@ def collect(out, indir="in"):
         text = md.read_text(encoding="utf-8")
         if not is_photo_md(text):
             continue
-        by_source[source_of(text)] = md.name
+        by_source[source_of(text)] = md
         parts.append(strip_omissions(strip_head(text)))
     (out / "задачи.md").write_text("\n\n".join(parts) + "\n", encoding="utf-8")
 
     reg = {k: v for k, v in load_registry(out).items() if (out / v["md"]).exists()}
-    if indir.is_dir():
-        for f in sorted(indir.iterdir()):
-            if f.is_file() and classify(f) == "photo" and f.name in by_source:
-                reg[digest(f)] = {
-                    "src": f.name,
-                    "md": f"raw/{by_source[f.name]}",
-                    "at": datetime.date.today().isoformat(),
-                }
+    inputs = sorted(indir.iterdir()) if indir.is_dir() else [indir]
+    for f in inputs:
+        md = by_source.get(f.name)
+        if md and f.is_file() and md.stat().st_mtime_ns >= f.stat().st_mtime_ns:
+            key = digest(f)
+            target = f"raw/{md.name}"
+            reg = {k: v for k, v in reg.items() if k == key or v["md"] != target}
+            reg[key] = {
+                "src": f.name,
+                "md": target,
+                "at": datetime.date.today().isoformat(),
+            }
     save_registry(out, reg)
     return len(parts)
 
@@ -359,11 +364,26 @@ def md_names(files):
     }
 
 
-def resolve_data(arg):
-    """${CLAUDE_PLUGIN_DATA} может не подставиться — тогда веса живут в ~/.to-md."""
-    if arg and "${" not in str(arg):
-        return pathlib.Path(arg)
-    return pathlib.Path.home() / ".to-md"
+def resolve_data(arg=""):
+    """Новая установка общая для клиентов, прежняя доступна до переноса."""
+    for value in (arg, os.environ.get("TO_MD_DATA")):
+        if value and "${" not in str(value):
+            return pathlib.Path(value).expanduser().absolute()
+    home = pathlib.Path.home()
+    base = os.environ.get("LOCALAPPDATA" if os.name == "nt" else "XDG_DATA_HOME")
+    data = (
+        pathlib.Path(base).expanduser() if base else home / ".local" / "share"
+    ) / "to-md"
+    if data.is_dir():
+        return data.absolute()
+    claude = os.environ.get("CLAUDE_PLUGIN_DATA")
+    for legacy in (
+        home / ".to-md",
+        pathlib.Path(claude).expanduser() if claude else None,
+    ):
+        if legacy and ((legacy / "venv").is_dir() or (legacy / "models").is_dir()):
+            return legacy.absolute()
+    return data.absolute()
 
 
 def venv_python(data):
@@ -382,18 +402,14 @@ def whisper_cli():
 
 def reexec_into_venv(data):
     """Уходим в свой venv сами: системный python бывает managed (PEP 668) или сломан."""
-    if os.environ.get("TO_MD_IN_VENV"):
-        return
     py = venv_python(data)
-    if py is None:
+    if py is None or pathlib.Path(sys.prefix).resolve() == (data / "venv").resolve():
         return
     try:
-        if pathlib.Path(sys.executable).resolve() == py.resolve():
-            return
         os.execve(
             str(py),
             [str(py), os.path.abspath(__file__), *sys.argv[1:]],
-            dict(os.environ, TO_MD_IN_VENV="1"),
+            os.environ,
         )
     except OSError as e:  # остаёмся на текущем питоне: пусть доктор покажет правду
         print(f"! не удалось перейти в {py}: {e}", file=sys.stderr)
@@ -419,12 +435,13 @@ def bootstrap(data):
     data = pathlib.Path(data)
     uv = ensure_uv()
     venv = data / "venv"
-    print(f"venv: {venv} (python {VENV_PYTHON} от uv)")
-    subprocess.run([uv, "venv", "--python", VENV_PYTHON, str(venv)], check=True)
+    if venv_python(data) is None:
+        print(f"venv: {venv} (python {VENV_PYTHON} от uv)", flush=True)
+        subprocess.run([uv, "venv", "--python", VENV_PYTHON, str(venv)], check=True)
     py = venv_python(data)
     if py is None:
         raise RuntimeError(f"venv не создался: {venv}")
-    print(f"пакеты: {', '.join(VENV_PKGS)}")
+    print(f"пакеты: {', '.join(VENV_PKGS)}", flush=True)
     subprocess.run([uv, "pip", "install", "--python", str(py), *VENV_PKGS], check=True)
     return py
 
@@ -440,6 +457,7 @@ def doctor(data):
             return False
 
     data = pathlib.Path(data)
+    py = venv_python(data)
     whisper = whisper_cli()
     anydoc_ok = have("anydoc")
     python_ok = sys.version_info >= (3, 10)
@@ -459,16 +477,21 @@ def doctor(data):
         "ytdlp": have("yt_dlp"),
         "nvidia": bool(shutil.which("nvidia-smi")),
         # Пусто до --bootstrap; непусто — значит доктор уже говорит от лица рабочего окружения.
-        "venv": str(venv_python(data) or ""),
+        "venv": str(py or ""),
         "data": str(data),
-        "weights": (data / "models" / "large-v3-turbo" / "model.bin").exists(),
+        "weights": model_ready(data / "models" / MODEL),
         # На Windows глобальная установка штатна. На macOS и Linux системный python
         # бывает managed или сломан, поэтому рабочим считается только своё окружение:
         # иначе остатки прежних установок выдают ready и уводят обратно на хрупкий путь.
         "ready": bool(whisper)
         and anydoc_ok
         and python_ok
-        and (os.name == "nt" or venv_python(data) is not None),
+        and (
+            os.name == "nt"
+            or bool(
+                py and pathlib.Path(sys.prefix).resolve() == (data / "venv").resolve()
+            )
+        ),
     }
 
 
@@ -567,12 +590,19 @@ def build_doc(source_path, text):
     return head(source_path, chars=len(text)) + text + "\n"
 
 
+def model_ready(directory):
+    return all(
+        (directory / name).is_file()
+        for name in ("config.json", "model.bin", "tokenizer.json")
+    )
+
+
 def run_whisper(
     files, names, rawdir, data, lang, hotwords, device, gap, vad=True, no_speech=None
 ):
     """Партия уходит одной командой; md собирается здесь же из json, json удаляется."""
-    model_dir = pathlib.Path(data) / "models" / "large-v3-turbo"
-    if (model_dir / "model.bin").exists():
+    model_dir = pathlib.Path(data) / "models" / MODEL
+    if model_ready(model_dir):
         model_args = ["--model_directory", str(model_dir)]
     else:
         # Первая загрузка идёт в HuggingFace: их xet-загрузчик виснет, хаб доступен не отовсюду.
@@ -580,7 +610,7 @@ def run_whisper(
         proxy = os.environ.get("TO_MD_PROXY")
         if proxy and not os.environ.get("HTTPS_PROXY"):
             os.environ["HTTPS_PROXY"] = os.environ["HTTP_PROXY"] = proxy
-        model_args = ["--model", "large-v3-turbo"]
+        model_args = ["--model", MODEL]
 
     if device == "cuda":
         cuda_dlls()
@@ -826,9 +856,24 @@ def selftest():
         src.write_bytes(b"two")
         assert digest(src) != key
 
-    assert resolve_data("${CLAUDE_PLUGIN_DATA}") == pathlib.Path.home() / ".to-md"
-    assert resolve_data("") == pathlib.Path.home() / ".to-md"
-    assert resolve_data("D:/w") == pathlib.Path("D:/w")
+    from unittest.mock import patch
+
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        neutral = home / ".local" / "share" / "to-md"
+        legacy = home / ".to-md"
+        with (
+            patch.dict(os.environ, clear=True),
+            patch.object(pathlib.Path, "home", return_value=home),
+        ):
+            assert resolve_data() == neutral
+            (legacy / "models").mkdir(parents=True)
+            assert resolve_data("${CLAUDE_PLUGIN_DATA}") == legacy
+            neutral.mkdir(parents=True)
+            assert resolve_data() == neutral
+            with patch.dict(os.environ, {"TO_MD_DATA": str(home / "env")}):
+                assert resolve_data() == home / "env"
+                assert resolve_data(str(home / "flag")) == home / "flag"
 
     with tempfile.TemporaryDirectory() as tmp:
         csv = pathlib.Path(tmp) / "t.csv"
@@ -934,6 +979,15 @@ def selftest():
         # Пересборка целиком, а не дозапись: второй прогон не удваивает.
         assert collect(tmp / "out", tmp / "in") == 2
         assert (tmp / "out" / "задачи.md").read_text(encoding="utf-8") == summary
+        src = tmp / "in" / "IMG_1.jpg"
+        assert collect(tmp / "out", src) == 2
+        assert dispatch(src, tmp / "out", tmp / "data")["cached"] == [src.name]
+        src.write_bytes(b"replacement")
+        old = (tmp / "out" / "raw" / "IMG_1.md").stat().st_mtime + 2
+        os.utime(src, (old, old))
+        assert collect(tmp / "out", src) == 2
+        assert digest(src) not in load_registry(tmp / "out")
+        assert dispatch(src, tmp / "out", tmp / "data")["photos"]["batches"]
 
     d = doctor(pathlib.Path(tempfile.gettempdir()) / "нет-такой-папки")
     assert set(d) == {
@@ -1071,7 +1125,7 @@ def main(argv):
             os.execve(
                 str(py),
                 [str(py), os.path.abspath(__file__), "--doctor", "--data", str(data)],
-                dict(os.environ, TO_MD_IN_VENV="1"),
+                os.environ,
             )
         except OSError as e:
             print(
