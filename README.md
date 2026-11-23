@@ -29,7 +29,7 @@ codex plugin marketplace add Inhibit0r/to-md --ref main
 codex plugin add to-md@to-md
 ```
 
-В новом сеансе вызовите `$to-md:setup`. Когда окружение готово, дайте путь или ссылку, например `$to-md:convert Конспект.pdf`.
+В Codex обе команды запускаются только по явному вызову. В новом сеансе выберите `$to-md:setup`. Когда окружение готово, дайте команду с путём или ссылкой, например `$to-md:convert Конспект.pdf`.
 
 **Claude Code.** Добавьте плагин в чате.
 

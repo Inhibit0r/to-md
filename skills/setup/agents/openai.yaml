@@ -1,0 +1,5 @@
+interface:
+  display_name: "to-md: setup"
+  short_description: "Проверка окружения и установка зависимостей to-md"
+policy:
+  allow_implicit_invocation: false

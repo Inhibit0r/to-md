@@ -32,7 +32,27 @@ jobs:
 
       # anydoc — ветка документов гоняется живьём; requests — прямой импорт
       # загрузчика Plaud, транзитивно он не приезжает.
-      - run: pip install firecrawl-anydoc requests
+      # PyYAML читает правила вызова навыков в этой проверке.
+      - run: pip install firecrawl-anydoc requests PyYAML
+
+      - name: Проверить ручной вызов навыков в Codex
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+
+          import yaml
+
+          commands = {"$to-md:convert", "$to-md:setup"}
+          for command in commands:
+              skill = command.split(":")[1]
+              config = Path("skills", skill, "agents", "openai.yaml")
+              policy = yaml.safe_load(config.read_text(encoding="utf-8"))["policy"]
+              assert policy["allow_implicit_invocation"] is False, command
+
+          manifest = json.loads(Path(".codex-plugin/plugin.json").read_text(encoding="utf-8"))
+          for prompt in manifest["interface"]["defaultPrompt"]:
+              assert prompt.split(maxsplit=1)[0] in commands, prompt
 
       - run: python -X utf8 scripts/to_md.py --selftest
 

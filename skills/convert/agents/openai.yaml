@@ -1,0 +1,5 @@
+interface:
+  display_name: "to-md: convert"
+  short_description: "Конвертация документов, записей и фотографий в Markdown"
+policy:
+  allow_implicit_invocation: false
